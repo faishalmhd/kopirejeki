@@ -35,6 +35,13 @@ const state = {
   isSettingsOpen: false,
   settingsDraft: null,
   settingsErrors: [],
+  orders: [],
+  ordersSummary: null,
+  ordersLoaded: false,
+  orderStatusFilter: 'semua',
+  orderDraft: null,
+  orderErrors: [],
+  orderBusy: false,
 };
 
 let toastTimer = null;
@@ -72,6 +79,38 @@ function formatPhoneDisplay(raw) {
   const rest = digits.startsWith('62') ? digits.slice(2) : digits;
   const grouped = rest.replace(/^(\d{2,4})(\d{3,4})(\d+)$/, '$1-$2-$3');
   return '+62 ' + grouped;
+}
+
+function formatDateTime(value) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '—';
+  try {
+    return new Intl.DateTimeFormat('id-ID', {
+      day: '2-digit',
+      month: 'short',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    }).format(date);
+  } catch {
+    return date.toLocaleString();
+  }
+}
+
+const ORDER_STATUS_LABELS = {
+  baru: 'Baru',
+  selesai: 'Selesai',
+  dibatalkan: 'Dibatalkan',
+};
+
+function orderStatusLabel(status) {
+  return ORDER_STATUS_LABELS[status] || status || '—';
+}
+
+function orderStatusClass(status) {
+  if (status === 'selesai') return 'order-status-selesai';
+  if (status === 'dibatalkan') return 'order-status-dibatalkan';
+  return 'order-status-baru';
 }
 
 function buildWhatsAppUrl(product) {
@@ -254,6 +293,96 @@ function renderToast() {
   `;
 }
 
+function renderOrderModal() {
+  const draft = state.orderDraft;
+  if (!draft) return '';
+  const product = state.products.find((p) => p.id === draft.productId);
+  if (!product) return '';
+
+  const maxQty = Math.max(1, Number(product.stok) || 1);
+  const qtyNum = Number(draft.qty);
+  const total =
+    Number.isFinite(qtyNum) && qtyNum > 0 ? qtyNum * Number(product.harga) : 0;
+
+  return `
+    <div class="modal-overlay">
+      <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="order-modal-title">
+        <div class="form-card-header">
+          <h3 id="order-modal-title">Pesan ${escapeHtml(product.nama)}</h3>
+          <button type="button" class="btn-close-form" data-action="close-order" aria-label="Tutup form pesanan">×</button>
+        </div>
+        <p class="section-sub">Pesanan akan dicatat ke riwayat agar pemilik toko dapat mengelola stok saat pesanan selesai.</p>
+        ${
+          state.orderErrors.length > 0
+            ? `<div class="form-errors" role="alert">
+                <strong>Periksa kembali pesanan Anda:</strong>
+                <ul>${state.orderErrors.map((err) => `<li>${escapeHtml(err)}</li>`).join('')}</ul>
+              </div>`
+            : ''
+        }
+        <form id="order-form" novalidate>
+          <div class="order-summary">
+            <div class="order-summary-visual">${renderVisual(product.imageUrl, 'order-summary-img')}</div>
+            <div>
+              <strong>${escapeHtml(product.nama)}</strong>
+              <div class="table-sub">${formatRupiah(product.harga)} / unit · Stok tersedia ${maxQty}</div>
+            </div>
+          </div>
+          <div class="form-grid">
+            <div class="form-group">
+              <label for="field-order-qty">Jumlah *</label>
+              <input
+                id="field-order-qty"
+                name="qty"
+                type="number"
+                min="1"
+                max="${maxQty}"
+                step="1"
+                required
+                value="${escapeHtml(draft.qty)}"
+                data-input="order-qty"
+              />
+            </div>
+            <div class="form-group">
+              <label for="field-order-name">Nama Pelanggan</label>
+              <input
+                id="field-order-name"
+                name="customer_name"
+                type="text"
+                maxlength="80"
+                placeholder="Opsional"
+                value="${escapeHtml(draft.customerName)}"
+                data-input="order-customer"
+              />
+            </div>
+          </div>
+          <div class="form-group">
+            <label for="field-order-note">Catatan</label>
+            <textarea
+              id="field-order-note"
+              name="note"
+              rows="2"
+              maxlength="200"
+              placeholder="Contoh: tanpa gula, ambil di kedai"
+              data-input="order-note"
+            >${escapeHtml(draft.note)}</textarea>
+          </div>
+          <div class="order-total-row">
+            <span>Total pesanan</span>
+            <strong>${formatRupiah(total)}</strong>
+          </div>
+          <div class="form-actions">
+            <button type="submit" class="btn btn-success" ${state.orderBusy ? 'disabled' : ''}>
+              ${state.orderBusy ? 'Memproses…' : 'Kirim via WhatsApp'}
+            </button>
+            <button type="button" class="btn btn-outline" data-action="close-order">Batal</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  `;
+}
+
 function renderProductCard(produk) {
   const waUrl = buildWhatsAppUrl(produk);
   const outOfStock = Number(produk.stok) <= 0;
@@ -291,7 +420,7 @@ function renderProductCard(produk) {
               ? '<button type="button" class="btn btn-wa btn-disabled" disabled>Stok Habis</button>'
               : !waUrl
                 ? '<button type="button" class="btn btn-wa btn-disabled" disabled>Nomor WhatsApp Belum Diatur</button>'
-                : `<a href="${escapeHtml(waUrl)}" target="_blank" rel="noopener noreferrer" class="btn btn-wa">💬 Pesan via WhatsApp</a>`
+                : `<button type="button" class="btn btn-wa" data-action="open-order" data-id="${escapeHtml(produk.id)}">💬 Pesan via WhatsApp</button>`
           }
         </div>
       </div>
@@ -624,6 +753,184 @@ function renderSettingsForm() {
   `;
 }
 
+function renderSalesRecap(summary) {
+  const s = summary || {};
+  const topProducts = Array.isArray(s.topProducts) ? s.topProducts : [];
+
+  return `
+    <div class="section-header sales-header">
+      <div>
+        <h3>Rekap Penjualan</h3>
+        <p class="section-sub">
+          Dihitung dari pesanan berstatus "Selesai". Stok produk berkurang otomatis saat pesanan diselesaikan.
+        </p>
+      </div>
+    </div>
+
+    <div class="stats-grid">
+      <div class="stat-card">
+        <span class="stat-label">Pendapatan Selesai</span>
+        <strong class="stat-value accent">${formatRupiah(s.revenue || 0)}</strong>
+        <span class="stat-hint">Bulan ini: ${formatRupiah(s.monthRevenue || 0)}</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-label">Pesanan Selesai</span>
+        <strong class="stat-value">${Number(s.completedOrders) || 0}</strong>
+        <span class="stat-hint">${Number(s.itemsSold) || 0} unit terjual</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-label">Menunggu Konfirmasi</span>
+        <strong class="stat-value">${Number(s.pendingOrders) || 0}</strong>
+        <span class="stat-hint">Pendapatan hari ini: ${formatRupiah(s.todayRevenue || 0)}</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-label">Rata-rata / Pesanan</span>
+        <strong class="stat-value">${formatRupiah(s.averageOrderValue || 0)}</strong>
+        <span class="stat-hint">Total ${Number(s.totalOrders) || 0} pesanan tercatat</span>
+      </div>
+    </div>
+
+    ${
+      topProducts.length > 0
+        ? `<div class="top-products-card">
+            <h4>Produk Terlaris</h4>
+            <ol class="top-products-list">
+              ${topProducts
+                .map(
+                  (item, index) => `
+                    <li>
+                      <span class="top-rank">${index + 1}</span>
+                      <span class="top-name">${escapeHtml(item.productName)}</span>
+                      <span class="top-qty">${Number(item.qty) || 0} unit</span>
+                      <strong>${formatRupiah(item.revenue || 0)}</strong>
+                    </li>
+                  `
+                )
+                .join('')}
+            </ol>
+          </div>`
+        : ''
+    }
+  `;
+}
+
+function renderOrderRow(order) {
+  const customer = order.customerName || 'Pelanggan WhatsApp';
+  const noteLine = order.note ? `<div class="table-sub">${escapeHtml(order.note)}</div>` : '';
+  const actions = [];
+
+  if (order.status !== 'selesai') {
+    actions.push(
+      `<button type="button" class="btn-sm btn-finish" data-action="set-order-status" data-id="${escapeHtml(
+        order.id
+      )}" data-status="selesai" title="Stok akan dikurangi otomatis">Selesaikan</button>`
+    );
+  }
+  if (order.status !== 'dibatalkan') {
+    actions.push(
+      `<button type="button" class="btn-sm btn-delete" data-action="set-order-status" data-id="${escapeHtml(
+        order.id
+      )}" data-status="dibatalkan">Batalkan</button>`
+    );
+  }
+  if (order.status !== 'baru') {
+    actions.push(
+      `<button type="button" class="btn-sm btn-edit" data-action="set-order-status" data-id="${escapeHtml(
+        order.id
+      )}" data-status="baru">Buka Lagi</button>`
+    );
+  }
+
+  return `
+    <tr>
+      <td class="nowrap">${formatDateTime(order.createdAt)}</td>
+      <td>
+        <strong>${escapeHtml(customer)}</strong>
+        ${noteLine}
+      </td>
+      <td>
+        <div>${escapeHtml(order.productName)}</div>
+        <div class="table-sub">${escapeHtml(order.kategori || '')}</div>
+      </td>
+      <td class="nowrap">x${Number(order.qty) || 0}</td>
+      <td class="nowrap">${formatRupiah(order.total)}</td>
+      <td class="nowrap">
+        <span class="order-status ${orderStatusClass(order.status)}">${orderStatusLabel(order.status)}</span>
+      </td>
+      <td class="nowrap">
+        <div class="table-actions">${actions.join('')}</div>
+      </td>
+    </tr>
+  `;
+}
+
+function renderOrdersTable() {
+  const filter = state.orderStatusFilter;
+  const filters = [
+    ['semua', 'Semua'],
+    ['baru', 'Baru'],
+    ['selesai', 'Selesai'],
+    ['dibatalkan', 'Dibatalkan'],
+  ];
+  const visibleOrders =
+    filter === 'semua' ? state.orders : state.orders.filter((order) => order.status === filter);
+
+  return `
+    <div class="table-card orders-card">
+      <div class="orders-header">
+        <div>
+          <h3>Riwayat Pesanan WhatsApp</h3>
+          <p class="section-sub">
+            Pesanan tercatat otomatis saat pelanggan menekan tombol pesan. Tandai "Selesai" untuk memotong stok.
+          </p>
+        </div>
+        <div class="order-filters" role="group" aria-label="Filter status pesanan">
+          ${filters
+            .map(
+              ([value, label]) => `
+                <button
+                  type="button"
+                  class="pill-btn ${filter === value ? 'active' : ''}"
+                  data-action="filter-order-status"
+                  data-status="${value}"
+                >
+                  ${label}
+                </button>
+              `
+            )
+            .join('')}
+        </div>
+      </div>
+      <div class="table-responsive">
+        <table class="product-table order-table">
+          <thead>
+            <tr>
+              <th>Waktu</th>
+              <th>Pelanggan</th>
+              <th>Produk</th>
+              <th>Qty</th>
+              <th>Total</th>
+              <th>Status</th>
+              <th>Aksi</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${
+              visibleOrders.length === 0
+                ? `<tr><td colspan="7" class="table-empty">${
+                    state.orders.length === 0
+                      ? 'Belum ada pesanan. Pesanan dari tombol WhatsApp pada katalog akan muncul di sini.'
+                      : 'Tidak ada pesanan dengan status ini.'
+                  }</td></tr>`
+                : visibleOrders.map((order) => renderOrderRow(order)).join('')
+            }
+          </tbody>
+        </table>
+      </div>
+    </div>
+  `;
+}
+
 function renderDashboardView(stats) {
   return `
     <section class="dashboard-section">
@@ -668,6 +975,8 @@ function renderDashboardView(stats) {
             <span class="stat-hint">Produk perlu segera diisi ulang</span>
           </div>
         </div>
+
+        ${renderSalesRecap(state.ordersSummary)}
 
         ${state.isSettingsOpen ? renderSettingsForm() : ''}
         ${state.isFormOpen ? renderProductForm() : ''}
@@ -726,6 +1035,8 @@ function renderDashboardView(stats) {
             </table>
           </div>
         </div>
+
+        ${renderOrdersTable()}
       </div>
     </section>
   `;
@@ -777,6 +1088,7 @@ function render() {
             : renderLoginView()
       }
     </main>
+    ${renderOrderModal()}
   `;
 }
 
@@ -833,6 +1145,7 @@ async function bootstrap() {
     state.products = productsRes.products || [];
     state.settings = { ...DEFAULT_SETTINGS, ...(settingsRes.settings || {}) };
     await loadMeta();
+    if (state.user) await loadOrders(true);
     if (
       state.filters.kategori !== 'Semua' &&
       !state.categories.includes(state.filters.kategori)
@@ -847,6 +1160,34 @@ async function bootstrap() {
   }
 }
 
+async function loadOrders(silent = true) {
+  if (!state.user) {
+    state.orders = [];
+    state.ordersSummary = null;
+    state.ordersLoaded = false;
+    return;
+  }
+
+  try {
+    const [ordersRes, summaryRes] = await Promise.all([
+      apiFetch('/api/orders'),
+      apiFetch('/api/orders/summary'),
+    ]);
+    state.orders = ordersRes.orders || [];
+    state.ordersSummary = summaryRes.summary || null;
+    state.ordersLoaded = true;
+  } catch (error) {
+    if (error && error.status === 401) {
+      state.user = null;
+      state.orders = [];
+      state.ordersSummary = null;
+      state.ordersLoaded = false;
+      return;
+    }
+    if (!silent) handleApiError(error);
+  }
+}
+
 async function refreshData(silent = false) {
   try {
     const [productsRes, settingsRes] = await Promise.all([
@@ -856,6 +1197,7 @@ async function refreshData(silent = false) {
     state.products = productsRes.products || [];
     state.settings = { ...DEFAULT_SETTINGS, ...(settingsRes.settings || {}) };
     state.loadError = '';
+    if (state.user) await loadOrders(true);
     if (!silent) {
       showToast('Data terbaru berhasil dimuat.', 'success');
     }
@@ -903,6 +1245,13 @@ async function logout() {
   state.formErrors = [];
   state.settingsDraft = null;
   state.settingsErrors = [];
+  state.orders = [];
+  state.ordersSummary = null;
+  state.ordersLoaded = false;
+  state.orderStatusFilter = 'semua';
+  state.orderDraft = null;
+  state.orderErrors = [];
+  state.orderBusy = false;
   state.loginError = '';
   state.activeTab = 'dashboard';
   showToast('Anda telah keluar dari dashboard.', 'success');
@@ -1052,11 +1401,147 @@ async function importJson(file) {
   }
 }
 
+async function submitOrder(formData) {
+  const draft = state.orderDraft;
+  if (!draft) return;
+
+  const product = state.products.find((p) => p.id === draft.productId);
+  if (!product) {
+    state.orderDraft = null;
+    update();
+    return;
+  }
+
+  const qty = Number(formData.get('qty'));
+  const customerName = String(formData.get('customer_name') || '').trim();
+  const note = String(formData.get('note') || '').trim();
+
+  const errors = [];
+  if (!Number.isInteger(qty) || qty < 1) {
+    errors.push('Jumlah pesanan minimal 1 unit.');
+  } else if (qty > Number(product.stok)) {
+    errors.push('Jumlah melebihi stok tersedia (' + product.stok + ' unit).');
+  }
+  if (customerName.length > 80) errors.push('Nama pelanggan maksimal 80 karakter.');
+  if (note.length > 200) errors.push('Catatan maksimal 200 karakter.');
+
+  if (errors.length > 0) {
+    state.orderErrors = errors;
+    showToast(errors[0], 'error');
+    update();
+    return;
+  }
+
+  state.orderDraft = { ...draft, qty: formData.get('qty'), customerName, note };
+  state.orderErrors = [];
+  state.orderBusy = true;
+  update();
+
+  const waWindow = window.open('about:blank', '_blank');
+  if (waWindow) {
+    try {
+      waWindow.opener = null;
+    } catch {}
+  }
+
+  try {
+    const result = await apiFetch('/api/orders', {
+      method: 'POST',
+      body: JSON.stringify({
+        product_id: product.id,
+        qty,
+        customer_name: customerName,
+        note,
+      }),
+    });
+
+    state.orderBusy = false;
+    state.orderDraft = null;
+    state.orderErrors = [];
+    if (state.user) await loadOrders(true);
+    showToast('Pesanan #' + result.order.id + ' dicatat. Melanjutkan ke WhatsApp…', 'success');
+    update();
+
+    if (result.whatsappUrl) {
+      if (waWindow) waWindow.location.href = result.whatsappUrl;
+      else window.location.href = result.whatsappUrl;
+    } else {
+      if (waWindow) waWindow.close();
+      showToast('Nomor WhatsApp toko belum diatur dengan benar.', 'error');
+      update();
+    }
+  } catch (error) {
+    state.orderBusy = false;
+    if (waWindow) waWindow.close();
+    if (error.status === 401) {
+      handleApiError(error);
+      return;
+    }
+    state.orderErrors =
+      (error.data && Array.isArray(error.data.errors) && error.data.errors) || [
+        error?.message || 'Gagal mencatat pesanan.',
+      ];
+    showToast(state.orderErrors[0], 'error');
+    update();
+  }
+}
+
+async function setOrderStatus(id, status) {
+  const order = state.orders.find((item) => item.id === id);
+  if (!order) return;
+
+  const labels = {
+    selesai: 'ditandai selesai',
+    dibatalkan: 'dibatalkan',
+    baru: 'dibuka kembali',
+  };
+
+  let message =
+    'Tandai pesanan "' +
+    order.productName +
+    '" (' +
+    order.qty +
+    ' unit) sebagai ' +
+    orderStatusLabel(status) +
+    '?';
+  if (status === 'selesai') {
+    message += '\nStok produk akan dikurangi otomatis sebesar ' + order.qty + ' unit.';
+  }
+
+  if (!window.confirm(message)) return;
+
+  try {
+    await apiFetch('/api/orders/' + encodeURIComponent(id) + '/status', {
+      method: 'PATCH',
+      body: JSON.stringify({ status }),
+    });
+    await refreshData(true);
+    showToast('Pesanan "' + order.productName + '" telah ' + (labels[status] || 'diperbarui') + '.', 'success');
+    update();
+  } catch (error) {
+    if (error && error.status === 409) {
+      showToast(error.message || 'Stok tidak mencukupi.', 'warning');
+      await refreshData(true);
+      return;
+    }
+    handleApiError(error);
+  }
+}
+
 /* ------------------------------------------------------------------ */
 /* Event listener                                                      */
 /* ------------------------------------------------------------------ */
 
 appContainer.addEventListener('click', (event) => {
+  if (event.target.classList && event.target.classList.contains('modal-overlay')) {
+    if (!state.orderBusy) {
+      state.orderDraft = null;
+      state.orderErrors = [];
+      update();
+    }
+    return;
+  }
+
   const target = event.target.closest('[data-action], [data-nav]');
   if (!target) return;
 
@@ -1074,6 +1559,29 @@ appContainer.addEventListener('click', (event) => {
     state.settingsErrors = [];
     state.loginError = '';
     update();
+  } else if (action === 'open-order') {
+    const product = state.products.find((p) => p.id === target.dataset.id);
+    if (!product || Number(product.stok) <= 0) return;
+    state.orderDraft = {
+      productId: product.id,
+      qty: 1,
+      customerName: '',
+      note: '',
+    };
+    state.orderErrors = [];
+    state.orderBusy = false;
+    update();
+    document.getElementById('field-order-qty')?.focus();
+  } else if (action === 'close-order') {
+    if (state.orderBusy) return;
+    state.orderDraft = null;
+    state.orderErrors = [];
+    update();
+  } else if (action === 'filter-order-status') {
+    state.orderStatusFilter = target.dataset.status || 'semua';
+    update();
+  } else if (action === 'set-order-status') {
+    setOrderStatus(target.dataset.id, target.dataset.status);
   } else if (action === 'filter-category') {
     state.filters.kategori = target.dataset.category || 'Semua';
     update();
@@ -1137,7 +1645,15 @@ appContainer.addEventListener('click', (event) => {
   } else if (action === 'logout') {
     logout();
   } else if (action === 'retry-load') {
-    bootstrap();
+document.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape' && state.orderDraft && !state.orderBusy) {
+    state.orderDraft = null;
+    state.orderErrors = [];
+    update();
+  }
+});
+
+bootstrap();
   }
 });
 
@@ -1148,6 +1664,15 @@ appContainer.addEventListener('input', (event) => {
     update();
   } else if (target.dataset.input === 'login-username') {
     state.loginUsername = target.value;
+  } else if (target.dataset.input === 'order-qty') {
+    if (state.orderDraft) {
+      state.orderDraft.qty = target.value;
+      update();
+    }
+  } else if (target.dataset.input === 'order-customer') {
+    if (state.orderDraft) state.orderDraft.customerName = target.value;
+  } else if (target.dataset.input === 'order-note') {
+    if (state.orderDraft) state.orderDraft.note = target.value;
   }
 });
 
@@ -1180,6 +1705,12 @@ appContainer.addEventListener('submit', (event) => {
       return;
     }
     login(username, password);
+    return;
+  }
+
+  if (event.target.id === 'order-form') {
+    event.preventDefault();
+    submitOrder(new FormData(event.target));
     return;
   }
 

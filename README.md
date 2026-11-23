@@ -5,7 +5,10 @@ Katalog digital dan dashboard pengelolaan untuk UMKM kopi. Aplikasi berjalan di 
 ## Fitur
 
 - Katalog publik: pencarian, filter kategori, urutan harga/nama, penanda produk unggulan, dan status stok.
-- Tombol **Pesan via WhatsApp** per produk dengan pesan otomatis (dinonaktifkan bila stok habis).
+- Tombol **Pesan via WhatsApp** per produk dengan formulir jumlah & catatan; setiap pesanan otomatis tercatat di riwayat.
+- Riwayat pesanan WhatsApp di dashboard: filter status (baru/selesai/dibatalkan) dan aksi ubah status.
+- **Stok otomatis**: stok produk berkurang saat pesanan ditandai *Selesai*, dan dikembalikan bila pesanan dibatalkan/dibuka lagi.
+- **Rekap penjualan** di dashboard: pendapatan pesanan selesai, jumlah pesanan, rata-rata nilai pesanan, pendapatan hari ini/bulan ini, dan produk terlaris.
 - Dashboard pengelola (login): tambah, edit, hapus produk, serta pengaturan nama toko, tagline, nomor WhatsApp, alamat, dan jam operasional.
 - Import/Export katalog dalam format JSON.
 - Autentikasi cookie sesi bertanda tangan HMAC, HttpOnly, SameSite, dan `Secure` saat HTTPS.
@@ -79,6 +82,7 @@ Nilai default pada `.env` proyek ini:
 ## Database & Backup
 
 - Lokasi default: `data/kopi-rejeki.db` (SQLite, mode WAL sehingga muncul juga `kopi-rejeki.db-wal` dan `kopi-rejeki.db-shm`).
+- Tabel: `products`, `settings`, `users`, dan `orders` (riwayat pesanan WhatsApp + status). Semua ikut satu file database yang sama.
 - Ubah lokasi dengan `DATA_DIR` (contoh di volume persisten).
 - Folder `data/` diabaikan git dan tidak boleh di-commit.
 
@@ -99,6 +103,7 @@ Copy-Item -Recurse data "backup-data-$(Get-Date -Format yyyyMMdd)"
 | GET | `/api/products` | publik | Daftar produk |
 | GET | `/api/settings` | publik | Pengaturan toko |
 | GET | `/api/meta` | publik | Daftar kategori & ikon |
+| POST | `/api/orders` | publik | Catat pesanan WhatsApp, mengembalikan `whatsappUrl` |
 | POST | `/api/auth/login` | publik | Login, mengeset cookie sesi |
 | POST | `/api/auth/logout` | publik | Hapus cookie sesi |
 | GET | `/api/auth/me` | publik | Status autentikasi |
@@ -107,7 +112,12 @@ Copy-Item -Recurse data "backup-data-$(Get-Date -Format yyyyMMdd)"
 | DELETE | `/api/products/:id` | login | Hapus produk |
 | GET | `/api/products/export` | login | Unduh katalog JSON (attachment) |
 | POST | `/api/products/import` | login | Ganti katalog dari array JSON |
+| GET | `/api/orders` | login | Riwayat pesanan (opsional `?status=baru\|selesai\|dibatalkan`) |
+| GET | `/api/orders/summary` | login | Rekap penjualan dari pesanan selesai |
+| PATCH | `/api/orders/:id/status` | login | Ubah status; `selesai` memotong stok otomatis |
 | PUT | `/api/settings` | login | Simpan pengaturan toko |
+
+Alur pesanan: pelanggan mengisi jumlah, nama (opsional), dan catatan → pesanan tersimpan dengan status `baru` → WhatsApp toko dibuka. Setelah pembayaran/pengiriman dikonfirmasi, pengelola menandai pesanan **Selesai** (stok otomatis berkurang) atau **Batalkan** (stok dikembalikan bila sebelumnya sudah dipotong). Rekap penjualan hanya menghitung pesanan berstatus `selesai`.
 
 Contoh format export/import:
 
@@ -131,9 +141,9 @@ Kategori valid: `Biji Kopi`, `Kopi Bubuk`, `Siap Saji`, `Bundling`.
 
 ```
 server.js            Express app, routing API, keamanan, static SPA
-src/db.js            Koneksi SQLite, skema, seed, operasi data
+src/db.js            Koneksi SQLite, skema, seed, produk, pesanan, rekap penjualan
 src/auth.js          bcrypt, token sesi HMAC, cookie, middleware
-src/validate.js      Validasi produk/pengaturan, normalisasi nomor WA
+src/validate.js      Validasi produk/pesanan/pengaturan, normalisasi nomor WA
 public/index.html    Kerangka SPA
 public/styles.css    Gaya tampilan
 public/app.js        Logika katalog, login, dashboard

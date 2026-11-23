@@ -5,9 +5,14 @@ const crypto = require('node:crypto');
 const VALID_CATEGORIES = ['Biji Kopi', 'Kopi Bubuk', 'Siap Saji', 'Bundling'];
 const EMOJI_OPTIONS = ['☕', '🫘', '🧊', '🎁', '🫖', '🥐'];
 const DEFAULT_EMOJI = '☕';
+const ORDER_STATUSES = ['baru', 'selesai', 'dibatalkan'];
 
 function generateProductId() {
   return 'kopi-' + Date.now().toString(36) + '-' + crypto.randomBytes(3).toString('hex');
+}
+
+function generateOrderId() {
+  return 'ord-' + Date.now().toString(36) + '-' + crypto.randomBytes(3).toString('hex');
 }
 
 function cleanText(value) {
@@ -162,12 +167,67 @@ function validateSettings(input) {
   };
 }
 
+function validateOrderInput(input) {
+  const errors = [];
+  if (!input || typeof input !== 'object' || Array.isArray(input)) {
+    return { valid: false, errors: ['Data pesanan tidak valid.'], data: null };
+  }
+
+  const productId = cleanText(input.product_id ?? input.productId);
+  if (!productId) errors.push('Produk wajib dipilih.');
+  else if (!/^[A-Za-z0-9_-]{1,64}$/.test(productId)) errors.push('ID produk tidak valid.');
+
+  const qtyRaw = input.qty;
+  const qty = Number(qtyRaw);
+  if (
+    isBlank(qtyRaw) ||
+    typeof qtyRaw === 'boolean' ||
+    (typeof qtyRaw === 'object' && qtyRaw !== null) ||
+    !Number.isFinite(qty) ||
+    !Number.isInteger(qty) ||
+    qty < 1 ||
+    qty > 1000000
+  ) {
+    errors.push('Jumlah pesanan harus bilangan bulat antara 1 dan 1.000.000.');
+  }
+
+  const customerName = cleanText(input.customer_name ?? input.customerName);
+  if (customerName.length > 80) errors.push('Nama pelanggan maksimal 80 karakter.');
+
+  const note = cleanText(input.note);
+  if (note.length > 200) errors.push('Catatan maksimal 200 karakter.');
+
+  if (errors.length > 0) {
+    return { valid: false, errors, data: null };
+  }
+
+  return {
+    valid: true,
+    errors: [],
+    data: {
+      productId,
+      qty,
+      customerName,
+      note,
+    },
+  };
+}
+
+function validateOrderStatus(value) {
+  const status = cleanText(value);
+  return ORDER_STATUSES.includes(status) ? status : null;
+}
+
 module.exports = {
   VALID_CATEGORIES,
   EMOJI_OPTIONS,
   DEFAULT_EMOJI,
+  ORDER_STATUSES,
   validateProduct,
   validateSettings,
+  validateOrderInput,
+  validateOrderStatus,
   normalizeWhatsAppNumber,
   generateProductId,
+  generateOrderId,
 };

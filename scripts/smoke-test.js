@@ -268,6 +268,137 @@ async function run() {
     const deletedAgain = await request('/api/products/smoke-1', { method: 'DELETE', cookie });
     check('Delete produk lagi -> 404', deletedAgain.status === 404);
 
+    const publicOrder = await request('/api/orders', {
+      method: 'POST',
+      body: {
+        product_id: 'kopi-01',
+        qty: 2,
+        customer_name: 'Pelanggan Uji',
+        note: 'Ambil di kedai',
+      },
+    });
+    const orderId = publicOrder.json?.order?.id;
+    check(
+      'Pesanan publik -> 201, total & WhatsApp URL benar',
+      publicOrder.status === 201 &&
+        publicOrder.json?.order?.total === 156000 &&
+        publicOrder.json?.order?.status === 'baru' &&
+        String(publicOrder.json?.whatsappUrl).startsWith('https://wa.me/6281234567890'),
+      'status=' + publicOrder.status + ' total=' + (publicOrder.json?.order?.total ?? 'null')
+    );
+
+    const overQty = await request('/api/orders', {
+      method: 'POST',
+      body: { product_id: 'kopi-01', qty: 9999 },
+    });
+    check('Pesanan melebihi stok -> 409', overQty.status === 409, 'status=' + overQty.status);
+
+    const missingProductOrder = await request('/api/orders', {
+      method: 'POST',
+      body: { product_id: 'tidak-ada', qty: 1 },
+    });
+    check(
+      'Pesanan produk tidak ada -> 404',
+      missingProductOrder.status === 404,
+      'status=' + missingProductOrder.status
+    );
+
+    const zeroQty = await request('/api/orders', {
+      method: 'POST',
+      body: { product_id: 'kopi-01', qty: 0 },
+    });
+    check('Pesanan qty 0 -> 400', zeroQty.status === 400, 'status=' + zeroQty.status);
+
+    const ordersNoAuth = await request('/api/orders');
+    check('Tanpa cookie GET /api/orders -> 401', ordersNoAuth.status === 401);
+
+    const summaryNoAuth = await request('/api/orders/summary');
+    check('Tanpa cookie GET /api/orders/summary -> 401', summaryNoAuth.status === 401);
+
+    const ordersAuthed = await request('/api/orders', { cookie });
+    const foundOrder = (ordersAuthed.json?.orders || []).find((item) => item.id === orderId);
+    check(
+      'GET /api/orders berisi pesanan baru',
+      ordersAuthed.status === 200 && foundOrder?.status === 'baru'
+    );
+
+    const stockOf = async (id) => {
+      const list = await request('/api/products');
+      return (list.json?.products || []).find((item) => item.id === id)?.stok;
+    };
+
+    const completedOrder = await request('/api/orders/' + orderId + '/status', {
+      method: 'PATCH',
+      cookie,
+      body: { status: 'selesai' },
+    });
+    const stockAfterComplete = await stockOf('kopi-01');
+    check(
+      'Selesaikan pesanan memotong stok otomatis (18 -> 16)',
+      completedOrder.status === 200 &&
+        completedOrder.json?.order?.status === 'selesai' &&
+        stockAfterComplete === 16,
+      'status=' + completedOrder.status + ' stok=' + stockAfterComplete
+    );
+
+    const summaryAfterComplete = await request('/api/orders/summary', { cookie });
+    check(
+      'Rekap penjualan menghitung pendapatan pesanan selesai',
+      summaryAfterComplete.status === 200 &&
+        summaryAfterComplete.json?.summary?.revenue === 156000 &&
+        summaryAfterComplete.json?.summary?.completedOrders === 1 &&
+        summaryAfterComplete.json?.summary?.itemsSold === 2,
+      'revenue=' + (summaryAfterComplete.json?.summary?.revenue ?? 'null')
+    );
+
+    const completedAgain = await request('/api/orders/' + orderId + '/status', {
+      method: 'PATCH',
+      cookie,
+      body: { status: 'selesai' },
+    });
+    const stockAfterCompleteAgain = await stockOf('kopi-01');
+    check(
+      'Selesaikan ulang idempoten (stok tetap 16)',
+      completedAgain.status === 200 && stockAfterCompleteAgain === 16,
+      'stok=' + stockAfterCompleteAgain
+    );
+
+    const cancelledOrder = await request('/api/orders/' + orderId + '/status', {
+      method: 'PATCH',
+      cookie,
+      body: { status: 'dibatalkan' },
+    });
+    const stockAfterCancel = await stockOf('kopi-01');
+    check(
+      'Batalkan pesanan selesai mengembalikan stok (16 -> 18)',
+      cancelledOrder.status === 200 &&
+        cancelledOrder.json?.order?.status === 'dibatalkan' &&
+        stockAfterCancel === 18,
+      'status=' + cancelledOrder.status + ' stok=' + stockAfterCancel
+    );
+
+    const invalidStatusChange = await request('/api/orders/' + orderId + '/status', {
+      method: 'PATCH',
+      cookie,
+      body: { status: 'status-ngawur' },
+    });
+    check(
+      'Ubah status tidak valid -> 400',
+      invalidStatusChange.status === 400,
+      'status=' + invalidStatusChange.status
+    );
+
+    const crossSiteOrder = await request('/api/orders', {
+      method: 'POST',
+      origin: 'http://evil.example',
+      body: { product_id: 'kopi-01', qty: 1 },
+    });
+    check(
+      'Pesanan lintas situs -> 403',
+      crossSiteOrder.status === 403,
+      'status=' + crossSiteOrder.status
+    );
+
     const importPayload = [
       {
         id: 'imp-1',

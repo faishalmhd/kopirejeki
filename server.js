@@ -12,6 +12,10 @@ const dbModule = require('./src/db');
 const {
   validateProduct,
   validateSettings,
+  validateOrderInput,
+  validateOrderStatus,
+  normalizeWhatsAppNumber,
+  ORDER_STATUSES,
   VALID_CATEGORIES,
   EMOJI_OPTIONS,
 } = require('./src/validate');
@@ -88,6 +92,14 @@ const loginLimiter = rateLimit({
   legacyHeaders: false,
   skipSuccessfulRequests: true,
   message: { ok: false, error: 'Terlalu banyak percobaan masuk. Coba lagi 15 menit lagi.' },
+});
+
+const orderLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  limit: 30,
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  message: { ok: false, error: 'Terlalu banyak pesanan dalam waktu singkat. Coba lagi sebentar.' },
 });
 
 app.use('/api', apiLimiter);
@@ -245,6 +257,90 @@ app.delete('/api/products/:id', requireAuth, (req, res) => {
     return res.status(404).json({ ok: false, error: 'Produk tidak ditemukan.' });
   }
   return res.json({ ok: true });
+});
+
+/* ------------------------------------------------------------------ */
+/* Pesanan WhatsApp & rekap penjualan                                  */
+/* ------------------------------------------------------------------ */
+
+function formatRupiah(value) {
+  return 'Rp ' + Math.round(Number(value) || 0).toString().replace(/\B(?=(\d{3})+(?!\d))/g, '.');
+}
+
+function buildOrderWhatsAppUrl(order) {
+  const settings = dbModule.getSettings();
+  const phone = normalizeWhatsAppNumber(settings.whatsapp_number);
+  if (!/^[1-9]\d{7,14}$/.test(phone)) return null;
+
+  const lines = [
+    'Halo ' + settings.store_name + ',',
+    'Saya ingin memesan:',
+    '• ' + order.productName + ' x' + order.qty,
+    'Total: ' + formatRupiah(order.total),
+    'Kode pesanan: ' + order.id,
+  ];
+  if (order.customerName) lines.push('Nama: ' + order.customerName);
+  if (order.note) lines.push('Catatan: ' + order.note);
+  lines.push('', 'Mohon konfirmasi ketersediaan stok dan pembayaran. Terima kasih.');
+
+  return 'https://wa.me/' + phone + '?text=' + encodeURIComponent(lines.join('\n'));
+}
+
+app.post('/api/orders', orderLimiter, (req, res) => {
+  const check = validateOrderInput(req.body);
+  if (!check.valid) {
+    return res.status(400).json({ ok: false, errors: check.errors, error: check.errors[0] });
+  }
+
+  const result = dbModule.createOrder(check.data);
+  if (!result.ok) {
+    return res
+      .status(result.code === 'NOT_FOUND' ? 404 : 409)
+      .json({ ok: false, error: result.error });
+  }
+
+  return res.status(201).json({
+    ok: true,
+    order: result.order,
+    whatsappUrl: buildOrderWhatsAppUrl(result.order),
+  });
+});
+
+app.get('/api/orders', requireAuth, (req, res) => {
+  const rawStatus = typeof req.query.status === 'string' ? req.query.status.trim() : '';
+  let status = '';
+  if (rawStatus && rawStatus !== 'semua') {
+    status = validateOrderStatus(rawStatus);
+    if (!status) {
+      return res.status(400).json({
+        ok: false,
+        error: 'Status harus salah satu dari: ' + ORDER_STATUSES.join(', ') + '.',
+      });
+    }
+  }
+  res.json({ ok: true, orders: dbModule.listOrders({ status }) });
+});
+
+app.get('/api/orders/summary', requireAuth, (req, res) => {
+  res.json({ ok: true, summary: dbModule.getSalesSummary() });
+});
+
+app.patch('/api/orders/:id/status', requireAuth, (req, res) => {
+  const status = validateOrderStatus(req.body?.status);
+  if (!status) {
+    return res.status(400).json({
+      ok: false,
+      error: 'Status harus salah satu dari: ' + ORDER_STATUSES.join(', ') + '.',
+    });
+  }
+
+  const result = dbModule.updateOrderStatus(req.params.id, status);
+  if (!result.ok) {
+    const code = result.code === 'NOT_FOUND' ? 404 : 409;
+    return res.status(code).json({ ok: false, error: result.error });
+  }
+
+  return res.json({ ok: true, order: result.order });
 });
 
 /* ------------------------------------------------------------------ */

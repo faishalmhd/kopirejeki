@@ -3,7 +3,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { DatabaseSync } = require('node:sqlite');
-const { generateProductId } = require('./validate');
+const { generateProductId, generateOrderId } = require('./validate');
 
 const DATA_DIR = process.env.DATA_DIR
   ? path.resolve(process.env.DATA_DIR)
@@ -43,7 +43,26 @@ db.exec(`
     created_at TEXT NOT NULL
   );
 
+  CREATE TABLE IF NOT EXISTS orders (
+    id TEXT PRIMARY KEY,
+    product_id TEXT,
+    product_name TEXT NOT NULL,
+    kategori TEXT NOT NULL DEFAULT '',
+    qty INTEGER NOT NULL,
+    unit_price INTEGER NOT NULL,
+    total INTEGER NOT NULL,
+    customer_name TEXT NOT NULL DEFAULT '',
+    note TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'baru',
+    stock_applied INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    completed_at TEXT
+  );
+
   CREATE INDEX IF NOT EXISTS idx_products_kategori ON products(kategori);
+  CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status);
+  CREATE INDEX IF NOT EXISTS idx_orders_created ON orders(created_at);
 `);
 
 const DEFAULT_SETTINGS = {
@@ -249,6 +268,220 @@ function replaceAllProducts(products) {
   }
 }
 
+function rowToOrder(row) {
+  return {
+    id: row.id,
+    productId: row.product_id,
+    productName: row.product_name,
+    kategori: row.kategori,
+    qty: row.qty,
+    unitPrice: row.unit_price,
+    total: row.total,
+    customerName: row.customer_name,
+    note: row.note,
+    status: row.status,
+    stockApplied: Boolean(row.stock_applied),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    completedAt: row.completed_at,
+  };
+}
+
+function listOrders(options = {}) {
+  const limitRaw = Number(options.limit);
+  const limit = Number.isInteger(limitRaw) && limitRaw > 0 ? Math.min(limitRaw, 1000) : 200;
+  const status = options.status;
+
+  const rows =
+    status && status !== 'semua'
+      ? db
+          .prepare(
+            'SELECT * FROM orders WHERE status = ? ORDER BY created_at DESC, rowid DESC LIMIT ?'
+          )
+          .all(status, limit)
+      : db
+          .prepare('SELECT * FROM orders ORDER BY created_at DESC, rowid DESC LIMIT ?')
+          .all(limit);
+
+  return rows.map(rowToOrder);
+}
+
+function getOrder(id) {
+  const row = db.prepare('SELECT * FROM orders WHERE id = ?').get(id);
+  return row ? rowToOrder(row) : null;
+}
+
+function createOrder(data) {
+  const product = getProduct(data.productId);
+  if (!product) {
+    return { ok: false, code: 'NOT_FOUND', error: 'Produk tidak ditemukan.' };
+  }
+  if (data.qty > product.stok) {
+    return {
+      ok: false,
+      code: 'OUT_OF_STOCK',
+      error: 'Stok tidak mencukupi. Tersedia ' + product.stok + ' unit.',
+    };
+  }
+
+  const now = new Date().toISOString();
+  const id = generateOrderId();
+  const total = product.harga * data.qty;
+
+  db.prepare(
+    `INSERT INTO orders (
+       id, product_id, product_name, kategori, qty, unit_price, total,
+       customer_name, note, status, stock_applied, created_at, updated_at, completed_at
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'baru', 0, ?, ?, NULL)`
+  ).run(
+    id,
+    product.id,
+    product.nama,
+    product.kategori,
+    data.qty,
+    product.harga,
+    total,
+    data.customerName || '',
+    data.note || '',
+    now,
+    now
+  );
+
+  return { ok: true, order: getOrder(id) };
+}
+
+function updateOrderStatus(id, nextStatus) {
+  const order = getOrder(id);
+  if (!order) {
+    return { ok: false, code: 'NOT_FOUND', error: 'Pesanan tidak ditemukan.' };
+  }
+  if (order.status === nextStatus) {
+    return { ok: true, order };
+  }
+
+  const now = new Date().toISOString();
+  let stockApplied = order.stockApplied;
+
+  db.exec('BEGIN');
+  try {
+    if (nextStatus === 'selesai' && !stockApplied) {
+      const product = getProduct(order.productId);
+      if (product) {
+        if (product.stok < order.qty) {
+          db.exec('ROLLBACK');
+          return {
+            ok: false,
+            code: 'INSUFFICIENT_STOCK',
+            error:
+              'Stok "' + product.nama + '" tidak mencukupi (tersisa ' + product.stok + ' unit).',
+          };
+        }
+        db.prepare('UPDATE products SET stok = stok - ?, updated_at = ? WHERE id = ?').run(
+          order.qty,
+          now,
+          product.id
+        );
+        stockApplied = true;
+      }
+    } else if (nextStatus !== 'selesai' && stockApplied) {
+      const product = getProduct(order.productId);
+      if (product) {
+        db.prepare('UPDATE products SET stok = stok + ?, updated_at = ? WHERE id = ?').run(
+          order.qty,
+          now,
+          product.id
+        );
+      }
+      stockApplied = false;
+    }
+
+    const completedAt = nextStatus === 'selesai' ? order.completedAt || now : null;
+    db.prepare(
+      `UPDATE orders
+       SET status = ?, stock_applied = ?, updated_at = ?, completed_at = ?
+       WHERE id = ?`
+    ).run(nextStatus, stockApplied ? 1 : 0, now, completedAt, id);
+
+    db.exec('COMMIT');
+  } catch (error) {
+    try {
+      db.exec('ROLLBACK');
+    } catch {}
+    throw error;
+  }
+
+  return { ok: true, order: getOrder(id) };
+}
+
+function getSalesSummary() {
+  const rows = db.prepare("SELECT * FROM orders WHERE status = 'selesai'").all();
+  const now = new Date();
+  const isSameDay = (value) => {
+    const date = new Date(value);
+    return (
+      date.getFullYear() === now.getFullYear() &&
+      date.getMonth() === now.getMonth() &&
+      date.getDate() === now.getDate()
+    );
+  };
+  const isSameMonth = (value) => {
+    const date = new Date(value);
+    return date.getFullYear() === now.getFullYear() && date.getMonth() === now.getMonth();
+  };
+
+  let revenue = 0;
+  let todayRevenue = 0;
+  let monthRevenue = 0;
+  let itemsSold = 0;
+  const productTotals = new Map();
+
+  for (const row of rows) {
+    revenue += row.total;
+    itemsSold += row.qty;
+    if (row.completed_at && isSameDay(row.completed_at)) todayRevenue += row.total;
+    if (row.completed_at && isSameMonth(row.completed_at)) monthRevenue += row.total;
+
+    const key = row.product_id || row.product_name;
+    const current = productTotals.get(key) || {
+      productId: row.product_id,
+      productName: row.product_name,
+      qty: 0,
+      revenue: 0,
+    };
+    current.qty += row.qty;
+    current.revenue += row.total;
+    productTotals.set(key, current);
+  }
+
+  const counts = db
+    .prepare(
+      `SELECT
+         COUNT(*) AS total_orders,
+         SUM(CASE WHEN status = 'baru' THEN 1 ELSE 0 END) AS pending_orders,
+         SUM(CASE WHEN status = 'selesai' THEN 1 ELSE 0 END) AS completed_orders,
+         SUM(CASE WHEN status = 'dibatalkan' THEN 1 ELSE 0 END) AS cancelled_orders
+       FROM orders`
+    )
+    .get();
+
+  const completedOrders = counts.completed_orders || 0;
+
+  return {
+    totalOrders: counts.total_orders || 0,
+    pendingOrders: counts.pending_orders || 0,
+    completedOrders,
+    cancelledOrders: counts.cancelled_orders || 0,
+    revenue,
+    itemsSold,
+    averageOrderValue: completedOrders > 0 ? Math.round(revenue / completedOrders) : 0,
+    todayRevenue,
+    monthRevenue,
+    topProducts: [...productTotals.values()]
+      .sort((a, b) => b.revenue - a.revenue)
+      .slice(0, 5),
+  };
+}
+
 function getSettings() {
   const rows = db.prepare('SELECT key, value FROM settings').all();
   const stored = {};
@@ -345,6 +578,11 @@ module.exports = {
   updateProduct,
   deleteProduct,
   replaceAllProducts,
+  listOrders,
+  getOrder,
+  createOrder,
+  updateOrderStatus,
+  getSalesSummary,
   getSettings,
   updateSettings,
   countUsers,

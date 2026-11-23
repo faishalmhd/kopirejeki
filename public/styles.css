@@ -1100,3 +1100,221 @@
       .text-center {
         text-align: center;
       }
+
+      /* ================================================================
+         Pesanan WhatsApp, stok otomatis, dan rekap penjualan
+         ================================================================ */
+
+      .sales-header {
+        margin-top: 4px;
+      }
+
+      .sales-header h3 {
+        font-size: 1.3rem;
+        font-weight: 800;
+      }
+
+      .stat-value.accent {
+        color: var(--accent-caramel-dark);
+      }
+
+      .top-products-card {
+        background: var(--bg-surface);
+        border: 1px solid var(--border-sand);
+        border-radius: var(--radius-md);
+        padding: 16px 18px;
+        margin-bottom: 22px;
+        box-shadow: var(--shadow-sm);
+      }
+
+      .top-products-card h4 {
+        margin: 0 0 10px;
+        font-family: var(--font-heading);
+        font-size: 1rem;
+      }
+
+      .top-products-list {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+
+      .top-products-list li {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        font-size: 0.88rem;
+        border-bottom: 1px dashed var(--border-sand);
+        padding-bottom: 8px;
+      }
+
+      .top-products-list li:last-child {
+        border-bottom: none;
+        padding-bottom: 0;
+      }
+
+      .top-rank {
+        width: 22px;
+        height: 22px;
+        border-radius: 50%;
+        background: var(--bg-warm-tint);
+        color: var(--accent-caramel-dark);
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 0.72rem;
+        font-weight: 800;
+        flex: none;
+      }
+
+      .top-name {
+        flex: 1;
+        font-weight: 600;
+      }
+
+      .top-qty {
+        color: var(--text-muted);
+        font-size: 0.8rem;
+      }
+
+      .top-products-list strong {
+        font-family: var(--font-heading);
+      }
+
+      .orders-card {
+        margin-top: 22px;
+      }
+
+      .orders-header {
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: space-between;
+        align-items: flex-end;
+        gap: 12px;
+        padding: 18px 18px 4px;
+      }
+
+      .orders-header h3 {
+        font-size: 1.2rem;
+        font-weight: 800;
+      }
+
+      .order-filters {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        padding-bottom: 4px;
+      }
+
+      .order-table {
+        min-width: 760px;
+      }
+
+      .order-status {
+        font-size: 0.76rem;
+        font-weight: 700;
+        padding: 3px 9px;
+        border-radius: 999px;
+        white-space: nowrap;
+      }
+
+      .order-status-baru {
+        background: #fef7e0;
+        color: #8a5314;
+        border: 1px solid #f5d67b;
+      }
+
+      .order-status-selesai {
+        background: #e6f4ea;
+        color: #137333;
+        border: 1px solid #b7dfc2;
+      }
+
+      .order-status-dibatalkan {
+        background: #fce8e6;
+        color: #c5221f;
+        border: 1px solid #f4b8b3;
+      }
+
+      .btn-finish {
+        background: #e6f4ea;
+        color: #137333;
+        border-color: #b7dfc2;
+      }
+
+      .btn-finish:hover {
+        background: #d3ebda;
+      }
+
+      .modal-overlay {
+        position: fixed;
+        inset: 0;
+        background: rgba(44, 26, 18, 0.45);
+        backdrop-filter: blur(2px);
+        z-index: 70;
+        display: flex;
+        align-items: flex-start;
+        justify-content: center;
+        padding: 20px 16px;
+        overflow-y: auto;
+      }
+
+      .modal-card {
+        width: 100%;
+        max-width: 560px;
+        background: var(--bg-surface);
+        border: 1px solid var(--border-sand);
+        border-radius: var(--radius-lg);
+        box-shadow: var(--shadow-md);
+        padding: 22px;
+        margin: auto;
+      }
+
+      .modal-card .form-card-header {
+        margin-bottom: 6px;
+      }
+
+      .order-summary {
+        display: flex;
+        align-items: center;
+        gap: 14px;
+        background: var(--bg-warm-tint);
+        border: 1px solid var(--border-sand);
+        border-radius: 12px;
+        padding: 12px 14px;
+        margin: 14px 0;
+      }
+
+      .order-summary-visual {
+        font-size: 2rem;
+        line-height: 1;
+      }
+
+      .order-summary .card-emoji {
+        font-size: 2rem;
+      }
+
+      .order-summary-img {
+        width: 48px;
+        height: 48px;
+        object-fit: cover;
+        border-radius: 8px;
+      }
+
+      .order-total-row {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 12px 0 4px;
+        border-top: 1px dashed var(--border-sand);
+        font-size: 0.95rem;
+      }
+
+      .order-total-row strong {
+        font-family: var(--font-heading);
+        font-size: 1.25rem;
+        color: var(--accent-caramel-dark);
+      }
